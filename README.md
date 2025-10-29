@@ -1,2 +1,2 @@
 # Canine_Urobiome_Processing_Methods
-R scripts and analyses for study evaluating the effects of urine volume and processing technique (pelleting vs filtration) on urinary microbiota detection in dogs
+This repository contains scripts used to analyze 16S rRNA amplicon sequencing data from canine urine, exploring the effects of urine volume and processing technique (pelleting vs filtration) on urinary microbiota detection. 
