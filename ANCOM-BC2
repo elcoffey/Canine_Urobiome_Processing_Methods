@@ -1,0 +1,49 @@
+#ANCOMBC2
+
+library(ANCOMBC)
+packageVersion("ANCOMBC")
+
+#create phyloseq objects with read counts
+PS_OTU <- read.csv("UMGC_PostDecontam_NoControls_v2_Phyloseq.csv", row.names = 1, header = T) 
+PS_OTU <- PS_OTU[rownames(PS_Meta), ]
+stopifnot(identical(rownames(PS_Meta), rownames(PS_OTU)))
+
+PS_OTU <- otu_table(PS_OTU, taxa_are_rows = FALSE)
+PS1_ct <- phyloseq(PS_OTU, PS_Meta, PS_Taxa)
+
+sample_data(PS1_ct)$Group <- factor(sample_data(PS1_ct)$Group)
+sample_data(PS1_ct)$Batch <- factor(sample_data(PS1_ct)$Batch)
+
+#genus level
+out <- ancombc2(
+  data = PS1_ct,
+  fix_formula = "Group",
+  tax_level = "Genus",
+  rand_formula = "(1 | Batch)",
+  p_adj_method = "fdr",
+  lib_cut = 1000,
+  group = "Group",
+  struc_zero = TRUE,
+  neg_lb = TRUE
+)
+
+res <- out$res
+write.csv(res, "ancombc2_cusp_genus.csv") #export results
+
+#family level
+out <- ancombc2(
+  data = PS1_ct,
+  fix_formula = "Group",
+  tax_level = "Family",
+  rand_formula = "(1 | Batch)",
+  p_adj_method = "fdr",
+  lib_cut = 1000,
+  group = "Group",
+  struc_zero = TRUE,
+  neg_lb = TRUE
+)
+
+res <- out$res
+write.csv(res, "ancombc2_cusp_fam.csv") #export results
+
+
