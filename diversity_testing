@@ -1,0 +1,435 @@
+#libraries
+library(vegan)
+library (ape)
+library(labdsv)
+library(dplyr)
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+
+#rarefaction curve
+otu_curve <- read.csv("Filtered_ASV_Counts.csv", header = TRUE, row.names = 1)
+Meta <- read.csv("Metadata_UMGC_v3.csv", header = TRUE, row.names = 1)
+rarecurve(otu_curve, col=c("firebrick4", "darkblue", "seagreen", "black", "mediumpurple4")[as.factor(Meta$Batch)], label = FALSE, xlim=c(0,2500))
+
+#phyloseq
+PS_OTU <- read.csv("PS_OTU_UMGC_1k.csv", row.names = 1, header = T) #only samples with 1k reads
+Meta2 <- read.csv("Meta_noLess_1k.csv", row.names = 1, header = T)
+
+PS_OTU <- PS_OTU[rownames(Meta2), ]
+stopifnot(identical(rownames(Meta2), rownames(PS_OTU)))
+
+PS_OTU <- otu_table(PS_OTU, taxa_are_rows = FALSE)
+PS_Meta <- sample_data(Meta2)
+
+taxa <- read.csv("PS_Taxonomy_UMGC.csv", header = T)
+taxa2 <- taxa[,-1]
+taxa2 <- as.matrix(taxa2)
+rownames(taxa2) <- taxa[,1]
+PS_Taxa <- tax_table(taxa2)
+
+PS <- phyloseq(PS_OTU, PS_Meta, PS_Taxa)
+
+#add phylogenetic information and merge
+random_tree = rtree(ntaxa(PS), rooted=TRUE, tip.label=taxa_names(PS))
+PS1 = merge_phyloseq(PS, random_tree)
+
+#create taxa barplot
+PS_RA <- PS1 %>%
+  tax_glom(taxrank = "Family") %>%
+  transform_sample_counts(function(x) {x/sum(x)}) %>%
+  psmelt() %>%
+  filter(Abundance > 0.15) %>%   # 15% abundance 
+  arrange(Family)
+
+PS_RA_F <- ggplot(PS_RA, aes(x = Group, y = Abundance, fill = Family)) +
+  geom_bar(stat = "identity", position = "fill", width = 0.7) +
+  scale_fill_viridis(discrete = TRUE, option = "H") +
+  theme_classic() +
+  theme(
+    strip.placement = "outside",
+    strip.text.x = element_text(size=16),
+    axis.text.x = element_text(size=14)
+  )
+
+PS_RA_F
+
+#alpha diversity 
+
+#shannon - linear mixed effects model & kruskal 
+shannon <- estimate_richness(PS1, measures = "Shannon")
+metadata <- data.frame(sample_data(PS1))
+shannon_data <- cbind(metadata, shannon)
+shannon_data$Volume <- factor(shannon_data$Volume)
+shannon_data$Group <- factor(shannon_data$Group)
+
+lmm_shannon <- lmer(Shannon ~ Volume * Group + (1 | Batch), data = shannon_data)
+summary(lmm_shannon)
+Anova(lmm_shannon, type = 3)
+kruskal.test(Shannon ~ Batch, data = shannon_data)
+
+#inverse simpson - linear mixed effects model & kruskal 
+invsimp <- estimate_richness(PS1, measures = "InvSimpson")
+simp_data <- cbind(metadata, invsimp)
+simp_data$Volume <- factor(simp_data$Volume)
+simp_data$Group <- factor(simp_data$Group)
+
+lmm_simp <- lmer(InvSimpson ~ Volume * Group + (1 | Batch), data = simp_data)
+summary(lmm_simp)
+Anova(lmm_simp, type = 3)
+kruskal.test(InvSimpson ~ Batch, data = simp_data)
+
+#observed richness - linear mixed effects model & kruskal 
+taxa.obs <- rowSums(otu_table(PS1) > 0)
+rich_data <- cbind(metadata, Richness = taxa.obs)
+rich_data$Volume <- factor(rich_data$Volume)
+rich_data$Group <- factor(rich_data$Group)
+
+lmm_rich <- lmer(Richness ~ Volume * Group + (1 | Batch), data = rich_data)
+summary(lmm_rich)
+Anova(lmm_rich, type = 3)
+kruskal.test(Richness ~ Batch, data = rich_data)
+
+
+#shannon - plot by volume, batch, and group 
+
+Meta2$SampleID <- rownames(Meta2)  # if needed
+shannon$SampleID <- rownames(shannon)
+p_shannon <- merge(Meta2, shannon, by = "SampleID")
+p_shannon$Group <- factor(p_shannon$Group, levels = c("Filter", "Pellet"))
+p_shannon$Volume <- factor(p_shannon$Volume)
+
+p7 <- ggplot(p_shannon, aes(x = Volume, 
+                           y = Shannon, 
+                           fill = Group)) +
+  geom_boxplot(aes(group = interaction(Volume, Group)),
+               position = position_dodge(width = 0.8),
+               color = "black",
+               outlier.shape = NA,
+               width = 0.6) +
+  geom_point(aes(color = Batch, group = interaction(Volume, Group)),
+             position = position_jitterdodge(jitter.width = 0.05,
+                                             dodge.width = 0.8),
+             size = 3,
+             alpha = 0.8) +
+  scale_fill_manual(values = c("lightgray", "darkgray")) +
+  scale_color_manual(values = c(
+    A = "firebrick4",
+    B = "darkblue",
+    C = "seagreen",
+    D = "black",
+    E = "mediumpurple4"
+  )) +
+scale_y_continuous(limits = c(0, NA)) +
+  labs(x = "Volume (mL)",
+       y = "Shannon Diversity",
+       color = "Batch") +  
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13),
+    axis.title = element_text(size = 14),
+    legend.position = "right",   # move legend to right side
+    legend.direction = "vertical", # make it vertical
+    legend.box = "vertical"        
+  ) +
+  guides(fill = "none") +
+  guides(color = "none")
+
+#inverse simpson - plot by volume, batch, and group 
+
+invsimp$SampleID <- rownames(invsimp)
+p_simp <- merge(Meta2, invsimp, by = "SampleID")
+p_simp$Group <- factor(p_simp$Group, levels = c("Filter", "Pellet"))
+p_simp$Volume <- factor(p_simp$Volume)
+
+p8 <- ggplot(p_simp, aes(x = Volume, 
+                           y = InvSimpson, 
+                           fill = Group)) +
+  geom_boxplot(aes(group = interaction(Volume, Group)),
+               position = position_dodge(width = 0.8),
+               color = "black",
+               outlier.shape = NA,
+               width = 0.6) +
+  geom_point(aes(color = Batch, group = interaction(Volume, Group)),
+             position = position_jitterdodge(jitter.width = 0.05,
+                                             dodge.width = 0.8),
+             size = 3,
+             alpha = 0.8) +
+  scale_fill_manual(values = c("lightgray", "darkgray")) +
+  scale_color_manual(values = c(
+    A = "firebrick4",
+    B = "darkblue",
+    C = "seagreen",
+    D = "black",
+    E = "mediumpurple4"
+  )) +
+scale_y_continuous(limits = c(0, NA)) +
+  labs(x = "Volume (mL)",
+       y = "Inverse Simpson Diversity",
+       color = "Batch") +  # removed fill legend label
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13),
+    axis.title = element_text(size = 14),
+    legend.position = "right",   # move legend to right side
+    legend.direction = "vertical", # make it vertical
+    legend.box = "vertical"        # ensure vertical stacking
+  ) +
+  guides(fill = "none") +
+  guides(color = "none")
+
+#observed richness - plot by volume, batch, and group 
+
+obs_df <- data.frame(SampleID = names(taxa.obs),
+                     Richness = taxa.obs)
+p_obs <- merge(Meta2, obs_df, by = "SampleID")
+p_obs$Group <- factor(p_obs$Group, levels = c("Filter", "Pellet"))
+p_obs$Volume <- factor(p_obs$Volume)
+
+p9 <- ggplot(p_obs, aes(x = Volume, 
+                       y = Richness, 
+                       fill = Group)) +
+  geom_boxplot(aes(group = interaction(Volume, Group)),
+               position = position_dodge(width = 0.8),
+               color = "black",
+               outlier.shape = NA,
+               width = 0.6) +
+  geom_point(aes(color = Batch, group = interaction(Volume, Group)),
+             position = position_jitterdodge(jitter.width = 0.05,
+                                             dodge.width = 0.8),
+             size = 3,
+             alpha = 0.8) +
+  scale_fill_manual(values = c("lightgray", "darkgray")) +
+  scale_color_manual(values = c(
+    A = "firebrick4",
+    B = "darkblue",
+    C = "seagreen",
+    D = "black",
+    E = "mediumpurple4"
+  )) +
+  labs(x = "Volume (mL)",
+       y = "Observed Richness",
+       color = "Batch") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 13),
+    axis.title = element_text(size = 14),
+  ) +
+  guides(fill = "none") 
+
+
+#beta diversity
+
+#bray-curtis PERMANOVA and PCoA generation
+taxa.diss <- vegdist(ASV, method = "bray")
+
+adonis2(taxa.diss ~ Group, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(taxa.diss ~ Volume, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(taxa.diss ~ Batch, data = Meta2, permutations = 1000)
+
+taxa.pcoa <- pcoa(taxa.diss)
+taxa.pcoa$values
+
+p_bray <- plot(taxa.pcoa$vectors[, 1:2], pch = c(19, 17), col=c("firebrick4", "darkblue", "seagreen", "black", "mediumpurple4")[as.factor(Meta2$Batch)], cex = 2, frame = F, cex.axis = 1.35, cex.lab = 1.35, xlab = "PCoA (30.2%)", ylab = "PCoA (15.6%)", xlim = (c(min(taxa.pcoa$vectors[,1]), max(taxa.pcoa$vectors[,1]) + 0.05))) +
+  theme_classic() + 
+  theme(text=element_text(size=8), axis.title = element_text(size=8)) 
+
+
+#weighted and unweighted unifrac PERMANOVA and PCoA generation
+wuf <- phyloseq::distance(PS1, method = "wunifrac")
+
+adonis2(wuf ~ Group, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(wuf ~ Volume, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(wuf ~ Batch, data = Meta2, permutations = 1000)
+
+wuf.pcoa <- ordinate(PS1, method = "MDS", distance = wuf)
+wuf.pcoa.egvals <- wuf.pcoa$values$Eigenvalues
+plot_ordination(PS1, wuf.pcoa, color = "Group") + 
+  coord_fixed(sqrt(wuf.pcoa.egvals[2]/wuf.pcoa.egvals[1]))
+biplot(wuf.pcoa)
+p_wuf <- plot(wuf.pcoa$vectors[, 1:2], pch = c(19, 17), col = c("firebrick4", "darkblue", "seagreen", "black", "mediumpurple4")[as.factor(Meta2$Batch)], cex = 2, frame = F, cex.axis = 1.35, cex.lab = 1.35, xlab = "PCoA (34.8%)", ylab = "PCoA (22.7%)") +
+  theme_classic() +
+  theme(legend.position = "none", text=element_text(size=8), axis.title = element_text(size=8))
+
+uuf <- phyloseq::distance(PS1, method = "unifrac")
+adonis2(uuf ~ Group, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(uuf ~ Volume, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(uuf ~ Batch, data = Meta2, permutations = 1000)
+
+uuf.pcoa <- ordinate(PS1, method = "MDS", distance = uuf)
+uuf.pcoa.egvals <- uuf.pcoa$values$Eigenvalues
+plot_ordination(PS1, uuf.pcoa, color = "Group") + 
+  coord_fixed(sqrt(uuf.pcoa.egvals[2]/uuf.pcoa.egvals[1]))
+biplot(uuf.pcoa)
+p_uuf <- plot(uuf.pcoa$vectors[, 1:2], pch = c(19, 17), col = c("firebrick4", "darkblue", "seagreen", "black", "mediumpurple4")[as.factor(Meta2$Batch)], cex = 2, frame = F, cex.axis = 1.35, cex.lab = 1.35, xlab = "PCoA (9.8%)", ylab = "PCoA (8.2%)") +
+  theme_classic() +
+  theme(legend.position = "none", text=element_text(size=8), axis.title = element_text(size=8))
+
+#jaccard PERMANOVA and PCoA generation
+taxa.diss <- vegdist(ASV, method = "jaccard")
+
+adonis2(taxa.diss ~ Group, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(taxa.diss ~ Volume, data = Meta2, permutations = 1000, strata = Meta2$Batch)
+adonis2(taxa.diss ~ Batch, data = Meta2, permutations = 1000)
+
+taxa.pcoa <- pcoa(taxa.diss)
+taxa.pcoa$values
+
+p_jacc <- plot(taxa.pcoa$vectors[, 1:2], pch = c(19, 17), col=c("firebrick4", "darkblue", "seagreen", "black", "mediumpurple4")[as.factor(Meta2$Batch)], cex = 2, frame = F, cex.axis = 1.35, cex.lab = 1.35, xlab = "PCoA (30.2%)", ylab = "PCoA (15.6%)") +
+  theme_classic() + 
+  theme(legend.position="none", text=element_text(size=8), axis.title = element_text(size=8))
+
+#dispersion testing
+
+run_permdisp <- function(batch_name, distmat, meta) {
+  idx <- meta$Batch == batch_name
+  sub_meta <- meta[idx, ]
+  
+  #subset distance matrix for this batch
+  sub_dist <- as.dist(as.matrix(distmat)[idx, idx])
+  
+  #skip if batch has < 2 groups or < 3 samples total
+  if (length(unique(sub_meta$Group)) < 2) return(NULL)
+  
+  #run betadisper on Group
+  bd <- betadisper(sub_dist, sub_meta$Group)
+  test <- anova(bd)
+  
+  #store results
+  data.frame(
+    Batch = batch_name,
+    F_value = test$`F value`[1],
+    p_value = test$`Pr(>F)`[1],
+    MeanDist_Pellet = mean(bd$distances[sub_meta$Group == "Pellet"], na.rm = TRUE),
+    MeanDist_Filter = mean(bd$distances[sub_meta$Group == "Filter"], na.rm = TRUE)
+  )
+}
+
+#apply to all batches
+disp_results <- lapply(unique(Meta2$Batch), run_permdisp, distmat = taxa.diss, meta = Meta2)
+disp_results <- do.call(rbind, disp_results)
+disp_results
+
+#extract distance-to-centroid values for visualization
+Meta2$DistToCentroid <- NA
+
+for (b in unique(Meta2$Batch)) {
+  idx <- Meta2$Batch == b
+  sub_dist <- as.dist(as.matrix(taxa.diss)[idx, idx])
+  bd <- betadisper(sub_dist, Meta2$Group[idx])
+  Meta2$DistToCentroid[idx] <- bd$distances
+}
+
+#plot distances within each batch
+ggplot(Meta2, aes(x = Group, y = DistToCentroid, fill = Group)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.8) +
+  facet_wrap(~ Batch, scales = "free_y") +
+  theme_bw(base_size = 13) +
+  labs(title = "Within-batch variability (Distance to centroid)",
+       x = "Processing method",
+       y = "Bray–Curtis distance to centroid") +
+  theme(legend.position = "none")
+
+#summarize across batches using a mixed model
+m <- lmer(DistToCentroid ~ Group + (1 | Batch), data = Meta2)
+summary(m)
+anova(m)
+
+disp_results %>%
+  tidyr::pivot_longer(cols = starts_with("MeanDist"),
+                      names_to = "Method",
+                      values_to = "MeanDistance") %>%
+  mutate(Method = gsub("MeanDist_", "", Method)) %>%
+  ggplot(aes(x = Batch, y = MeanDistance, color = Method, group = Method)) +
+  geom_point(size = 3) +
+  geom_line() +
+  theme_bw(base_size = 13) +
+  labs(y = "Mean Distance to Centroid (Bray-Curtis)",
+       title = "")
+
+#grouping volume as low (1, 3 mL) and high (10mL+)
+
+Meta2 <- Meta2 %>%
+  mutate(VolCat = ifelse(Volume %in% c(1, 3), "Low", "High"))
+
+#check counts per batch (to confirm balance)
+table(Meta2$Batch, Meta2$VolCat)
+
+run_permdisp_volcat <- function(batch_name, distmat, meta) {
+  idx <- meta$Batch == batch_name
+  sub_meta <- meta[idx, ]
+  sub_dist <- as.dist(as.matrix(distmat)[idx, idx])
+  
+  #skip if not enough categories
+  if (length(unique(sub_meta$VolCat)) < 2) return(NULL)
+  
+  #run betadisper
+  bd <- betadisper(sub_dist, as.factor(sub_meta$VolCat))
+  test <- anova(bd)
+  
+  data.frame(
+    Batch = batch_name,
+    F_value = test$`F value`[1],
+    p_value = test$`Pr(>F)`[1],
+    MeanDist_Low = mean(bd$distances[sub_meta$VolCat == "Low"], na.rm = TRUE),
+    MeanDist_High = mean(bd$distances[sub_meta$VolCat == "High"], na.rm = TRUE)
+  )
+}
+
+disp_results_volcat <- lapply(unique(Meta2$Batch), run_permdisp_volcat, distmat = taxa.diss, meta = Meta2)
+disp_results_volcat <- do.call(rbind, disp_results_volcat)
+disp_results_volcat
+
+#extract distances to centroid for plotting
+Meta2$DistToCentroid <- NA
+
+for (b in unique(Meta2$Batch)) {
+  idx <- Meta2$Batch == b
+  sub_dist <- as.dist(as.matrix(taxa.diss)[idx, idx])
+  bd <- betadisper(sub_dist, as.factor(Meta2$VolCat[idx]))
+  Meta2$DistToCentroid[idx] <- bd$distances
+}
+
+#plot results
+ggplot(Meta2, aes(x = VolCat, y = DistToCentroid, fill = VolCat)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.8) +
+  facet_wrap(~ Batch, scales = "free_y") +
+  theme_bw(base_size = 13) +
+  labs(title = "Within-batch variability (Low vs High urine volume)",
+       x = "Volume category",
+       y = "Bray–Curtis distance to centroid") +
+  theme(legend.position = "none")
+
+m_volcat <- lmer(DistToCentroid ~ VolCat + (1 | Batch), data = Meta2)
+anova(m_volcat)
+summary(m_volcat)
+
+#compare distance-to-centroid by urine batch with kruskall wallis
+kruskal.test(DistToCentroid ~ Batch, data = Meta2)
+
+disp_results_volcat %>%
+  tidyr::pivot_longer(
+    cols = starts_with("MeanDist"),
+    names_to = "VolCat",
+    values_to = "MeanDistance"
+  ) %>%
+  mutate(VolCat = gsub("MeanDist_", "", VolCat)) %>%
+  ggplot(aes(x = Batch, y = MeanDistance, color = VolCat, group = VolCat)) +
+  geom_point(size = 3) +
+  geom_line(linewidth = 1) +
+  theme_bw(base_size = 13) +
+  labs(
+    x = "Urine Batch",
+    y = "Mean Distance to Centroid (Bray-Curtis)",
+    color = "Volume Category",
+    title = ""
+  ) +
+  scale_color_manual(values = c("Low" = "steelblue4", "High" = "darkorange3")) +
+  theme(
+    panel.grid.major = element_line(color = "gray90"),
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 11)
+  )
+
